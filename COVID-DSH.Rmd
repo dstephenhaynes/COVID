@@ -1,0 +1,381 @@
+---
+title: "COVID-19 Analysis (January 2020 - March 2023)"
+author: "D.Haynes"
+date: "`r Sys.Date()`"
+output: html_document
+---
+<center>
+# COVID-19 Analysis
+# (January 2020 - March 2023)
+</center>
+
+### Determine if R packages are needed
+```{r, message = FALSE}
+if (!require("tinytex")) install.packages("tinytex")
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("lubridate")) install.packages ("lubridate")
+```
+
+### Import libraries
+
+```{r, message = FALSE}
+library(tinytex)
+library(tidyverse)
+library(lubridate)
+```
+
+### Import COVID19 Data
+
+As done in class, pull in the Johns Hopkins data - only using the Global data this time.
+```{r, message = FALSE}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+file_names <- c("time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_global.csv")
+
+urls <- str_c(url_in, file_names)
+
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+```
+
+### Rearrange data frame and eliminate unnecessary columns
+
+```{r}
+global_cases <- global_cases %>%
+    pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+                names_to = "date",
+                values_to = "cases") %>%
+select(-c(Lat,Long))
+
+global_deaths <- global_deaths %>%
+    pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+                names_to = "date",
+                values_to = "deaths") %>%
+select(-c(Lat,Long))
+```
+
+### Combine Global Cases and Deaths, Rename columns, Rearrange column order
+
+```{r}
+global <- global_cases %>%
+full_join(global_deaths)%>%
+rename(Country = 'Country/Region',
+Province_State = 'Province/State') %>%
+mutate(date = mdy(date))
+
+print(global)
+
+global <- global[, c("Country", "Province_State", "date", "cases", "deaths")]
+
+print(global)
+```
+
+### Filter out data with 0 cases
+```{r}
+global <- global %>% filter(cases > 0)
+
+print(global)
+```
+
+### Add column that calculates number of deaths per thousand cases
+
+```{r}
+global$deaths_per_thou_cases = 1000 * global$deaths / global$cases
+
+tail(global)
+```
+
+### Plot Deaths per Thousand Cases onto Line Chart
+
+The Legend for this chart had to be removed due to its size.<br>
+Also - why do I suddenly have 6,000 deaths per thousand cases in the middle of 2022 ?
+
+```{r}
+ggplot(global, aes(x = date, y = deaths_per_thou_cases, group = Country, color = Country)) +
+  geom_line(show.legend = FALSE) +
+  labs(title = "Deaths per Thousand COVID-19 Cases by Country",
+       x = "Date",
+       y = "Deaths per Thousand Cases") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_x_date(date_minor_breaks = "1 month")
+```
+
+### It's North Korea's fault - Try again
+
+Apparently North Korea didn't release COVID data until May 2022, and when they did, they apparently had 1 case and 6 deaths?<br>
+Let's just get rid of North Korea from our data set.
+
+```{r}
+print(global[global$date == "2022-05-13" & global$Country == "Korea, North",],n=Inf)
+
+print(global[global$date == "2022-05-14" & global$Country == "Korea, North",],n=Inf)
+
+global <- global %>%
+filter(!Country %in% "Korea, North")
+
+ggplot(global, aes(x = date, y = deaths_per_thou_cases, group = Country, color = Country)) +
+  geom_line(show.legend = FALSE) +
+  labs(title = "Deaths per Thousand COVID-19 Cases by Country",
+       x = "Date",
+       y = "Deaths per Thousand Cases") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_x_date(date_minor_breaks = "1 month")
+```
+
+### Better, but not really
+
+That brought the chart scale down, but plotting each country individually is completely unreadable.<br>
+What if we changed the plot type and summarized by month instead of day?
+
+```{r}
+global_monthly <- global %>%
+  group_by(Country, month = format(date, "%Y-%m")) %>%
+  summarize(avg_deaths_per_thou_cases = mean(deaths_per_thou_cases, na.rm = TRUE))
+
+ggplot(global_monthly, aes(x = month, y = avg_deaths_per_thou_cases, color = Country)) +
+  geom_point(show.legend = FALSE) +
+  labs(
+    title = "Average Deaths per Thousand COVID-19 Cases by Country (Monthly)",
+    x = "Month",
+    y = "Average Deaths per Thousand Cases"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### Still not better
+
+No matter which plot type I tried, showing all countries at once was a mess.<br>
+What if we try to arrange the countries by region?
+
+
+
+### Pull in dataset with Countries and Regions - map regions to current data
+
+How do I do that???<br>
+After a lot of web searches, I found several options including a very promising PoliSciData package.<br>
+In the end, however, I found a data set on Github that seemed to have what I wanted.
+
+```{r}
+countries_regions <- read.csv("https://raw.githubusercontent.com/lukes/ISO-3166-Countries-with-Regional-Codes/master/all/all.csv")
+
+head(countries_regions)
+
+# Join Region from new data to 'global'
+global <- global %>%
+  left_join(select(countries_regions, name, region), by = c("Country" = "name"))
+
+print(global)
+```
+
+### Rename Region and rearrange columns
+
+Arrange columns in new order and get rid of 'Province_State' column.
+
+```{r}
+global <- global %>%
+  rename(Region = "region")
+
+print(global)
+
+global <- global[, c("Country", "Region", "date", "cases", "deaths", "deaths_per_thou_cases")]
+
+print(global)
+```
+
+### Remove non-Countries from data and ensure all Countries are assigned a Region.
+
+This took....a while.<br>
+Trying to figure out why so many Country names didn't match between the two data sets was very time consuming.<br>
+In some cases, I had to change Country names in both data sets to simplify the matching.<br>
+
+```{r}
+# Remove entries that are not really countries. Some of these are ships.
+remove_countries <- c("Antarctica", "Diamond Princess", "MS Zaandam", "Summer Olympics 2020", "Winter Olympics 2022")
+global <- global %>%
+  filter(!Country %in% remove_countries)
+
+# Find Countries with no Region after data join
+unique(global[ ,c("Country","Region")])
+no_region <- global[is.na(global$Region) | global$Region == "NA", "Country"]
+unique(no_region)
+
+# Correct Country Names mismatched between sets
+countries_regions$name <- sub("Bolivia \\(Plurinational State of\\)", "Bolivia", countries_regions$name)
+countries_regions$name <- sub("Brunei Darussalam", "Brunei", countries_regions$name)
+global$Country <- sub("Burma", "Myanmar", global$Country)
+countries_regions$name <- sub("^Congo$", "Congo \\(Brazzaville\\)", countries_regions$name)
+countries_regions$name <- sub("Congo, Democratic Republic of the", "Congo \\(Kinshasa\\)", countries_regions$name)
+global$Country <- sub("Cote d'Ivoire", "Côte d'Ivoire", global$Country)
+countries_regions$name <- sub("Iran \\(Islamic Republic of\\)", "Iran", countries_regions$name)
+countries_regions$name <- sub("Korea, Republic of", "Korea, South", countries_regions$name)
+countries_regions$name <- sub("Lao People's Democratic Republic", "Laos", countries_regions$name)
+countries_regions$name <- sub("Micronesia \\(Federated States of\\)", "Micronesia", countries_regions$name)
+countries_regions$name <- sub("Moldova, Republic of", "Moldova", countries_regions$name)
+countries_regions$name <- sub("Palestine, State of", "Palestine", countries_regions$name)
+countries_regions$name <- sub("Russian Federation", "Russia", countries_regions$name)
+countries_regions$name <- sub("Syrian Arab Republic", "Syria", countries_regions$name)
+global$Country <- sub("Taiwan\\*", "Taiwan", global$Country)
+countries_regions$name <- sub("Taiwan, Province of China", "Taiwan", countries_regions$name)
+countries_regions$name <- sub("Tanzania, United Republic of", "Tanzania", countries_regions$name)
+global$Country <- sub("US", "United States of America", global$Country)
+countries_regions$name <- sub("United Kingdom of Great Britain and Northern Ireland", "United Kingdom", countries_regions$name)
+countries_regions$name <- sub("Venezuela \\(Bolivarian Republic of\\)", "Venezuela", countries_regions$name)
+countries_regions$name <- sub("Viet Nam", "Vietnam", countries_regions$name)
+global$Country <- sub("West Bank and Gaza", "Palestine", global$Country)
+```
+
+### Re-map Regions to new country names
+
+Run the join commands again to map Regions to Countries.<br>
+Also had to add a Region for Kosovo manually...which I could have done in the first place?
+
+```{r}
+# Clear previous Region mapping and rejoin
+global$Region <- NULL
+
+global <- global %>%
+  left_join(select(countries_regions, name, region), by = c("Country" = "name"))
+
+# Rearrange columns again
+global <- global %>%
+  rename(Region = "region")
+global <- global[, c("Country", "Region", "date", "cases", "deaths", "deaths_per_thou_cases")]
+
+# Fill in Region entry for Kosovo
+global <- global %>%
+  mutate(Region = ifelse(Country == "Kosovo", "Europe", Region))
+
+# Check for Countries with no Region again
+no_region <- global[is.na(global$Region) | global$Region == "NA", "Country"]
+
+# No data in this output is GOOD
+unique(no_region)
+```
+
+### Try monthly plot again but by Region instead of Country
+
+Every Country has a Region now!<br>
+Let's try that monthly summary again
+
+```{r}
+# Create new data set with Cases and Deaths summarized by Region
+global_region_monthly <- global %>%
+  group_by(Region, Date = as.Date(date, "%Y-%m-%d")) %>%
+  summarise(total_cases = sum(cases), total_deaths = sum(deaths))
+
+# Convert all dates to first day of the month for matching
+global_region_monthly$Month <- floor_date(global_region_monthly$Date, "month")
+
+# Create deaths per thousand cases ratio
+global_region_monthly$deaths_per_thou_cases <- 1000 * global_region_monthly$total_deaths / global_region_monthly$total_cases
+
+# Summarize by Region and Month
+global_region_monthly <- global_region_monthly %>%
+  group_by(Region, Month) %>%
+  summarise(avg_deaths_per_thou_cases = mean(deaths_per_thou_cases))
+
+# Plot Monthly Deaths per Thousand Cases on Line Chart by Region
+ggplot(global_region_monthly, aes(x = Month, y = avg_deaths_per_thou_cases, group = Region, color = Region)) +
+  geom_line() +
+  labs(title = "Average Deaths per Thousand COVID-19 Cases by Region",
+       x = "Date",
+       y = "Average Deaths per Thousand Cases") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.major.x = element_line(size = 0.5, color = "black")) +
+  scale_x_date(date_minor_breaks = "1 month")
+```
+
+### Create Global Average of Deaths per Thousand Cases
+
+An average of all global cases and deaths from January 2020 through March 2023.
+
+```{r}
+# New data set to sum total cases
+total_cases <- global %>%
+  group_by(date) %>%
+  summarise(total_cases = sum(cases))
+
+# New data set to sum total deaths
+total_deaths <- global %>%
+  group_by(date) %>%
+  summarise(total_deaths = sum(deaths))
+
+# Join the two together
+totals <- total_cases %>%
+  full_join(total_deaths)
+
+print(totals)
+
+# Create deaths per thousand cases ratio
+totals$deaths_per_thou_cases = 1000 * totals$total_deaths / totals$total_cases
+
+print(totals)
+
+# Plot Global Deaths per Thousand Cases on Line Chart
+ggplot(totals, aes(x = date, y = deaths_per_thou_cases)) +
+  geom_line() +
+  labs(title = "Number of Deaths per Thousand COVID-19 Cases (Global)",
+       x = "Date",
+       y = "Deaths per Thousand Cases") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.major.x = element_line(size = 0.5, color = "black")) +
+  scale_x_date(date_minor_breaks = "1 month")
+```
+
+### Combine the plots
+
+By combining the two plots, we can show that the<br>Global number of Deaths per Thousand Cases appears to be an appropriate average of the Regional chart.
+
+```{r}
+ggplot() +
+  geom_line(data = global_region_monthly, aes(x = Month, y = avg_deaths_per_thou_cases, group = Region, color = Region)) +
+  geom_line(data = totals, aes(x = date, y = deaths_per_thou_cases)) +
+  labs(title = "Number of Deaths per Thousand COVID-19 Cases (Global)",
+       x = "Date",
+       y = "Deaths per Thousand Cases") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.major.x = element_line(size = 0.5, color = "black")) +
+  scale_x_date(date_minor_breaks = "1 month")
+```
+
+### What could have happend
+
+As we now know, due to lock downs, quarantining, and the speed at which vaccines were developed, the number of COVID-19 cases, and therefore deaths, fell dramatically toward the end of 2020.<br>
+But what might have happened if those, subjectively, life-saving events hadn't occurred?<br>
+A predictive measurement of the number of deaths per thousand cases based on the first four months of data indicates that the number of deaths could have continued to climb until some other critical change had occurred.
+
+```{r}
+# Create prediction data set based on first 4 months of global data
+totals_test <- totals %>%
+  filter(date >= "2020-01-22" & date <= "2020-05-22")
+
+# Plot Global Deaths per Thousand Cases on Line Chart with Prediction
+ggplot(data = totals, aes(x = date, y = deaths_per_thou_cases)) +
+  geom_line() +
+  stat_smooth(data = totals_test, method = "lm", col = "red") +
+  labs(title = "Number of Deaths per Thousand COVID-19 Cases (Global)\n With Prediction",
+       x = "Date",
+       y = "Deaths per Thousand Cases") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.major.x = element_line(size = 0.5, color = "black")) +
+  scale_x_date(date_minor_breaks = "1 month")
+```
+
+### Bias Identification
+
+There are likely some issues present in this data, due to the way I decided to analyse and dissect the information.<br>
+By excluding North Korea from the data set, the global numbers for the second half of 2022 are likely skewed a bit lower.<br>
+The same could be said due to exclusion of the Olympics and ship-bound passenger data.<br>
+These are all valid cases and deaths that should be accounted for somewhere.
+
+```{r}
+sessionInfo()
+```
