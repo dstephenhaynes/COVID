@@ -1,0 +1,179 @@
+---
+output: html_document
+---
+<center>
+# NYPD Shootings by Time of Day and Week of Year
+# (2006-2022)
+</center>
+
+### Introduction
+
+This analysis will review Shooting Incident data provided by the NYPD. The analysis will highlight the number of events that occur during 3 time periods of each day (Morning, Afternoon/Evening, and Nighttime). The analysis will also summarize the number of events by each week in the year and highlight the average trends for each of those weeks.
+
+### Import R libraries and NYPD Data:
+
+```{r, message = FALSE}
+# Import Library Packages
+library(tinytex)
+library(tidyverse)
+library(lubridate)
+
+# Import Data
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+# Read in data
+nypd <- read_csv(url_in)
+```
+
+### Data Cleaning
+
+When reviewing the NYPD data set, there were many events which had incomplete data fields. This led me to focus on Time and Date of these events, since they contained the most complete data. The code below removes the incomplete columns, renames some remaining columns and rearranges the data frame by Date and Time.
+
+```{r, message = FALSE}
+# Remove Incomplete Columns
+nypd <- nypd %>%
+select_if(function(x) all(complete.cases(x)))
+
+# Rename some columns
+nypd <- nypd %>%
+rename(Date = 'OCCUR_DATE', Time = 'OCCUR_TIME', Borough = 'BORO')
+
+# Change Date to Date Format
+nypd <- nypd %>%
+mutate(Date = mdy(Date))
+
+# Sort by Date & Time
+nypd <- nypd %>%
+arrange(Date, Time)
+```
+
+### Additonal Data Cleaning and Sorting
+
+Here, we will convert the Time to a numeric value for easier sorting. This is also where the times are segmented into the following Time Segments:
+Morning           (04:00 - 12:00)
+Afternoon/Evening (12:00-20:00)
+Nighttime         (20:00 - 04:00)
+There was a bit of research needed to determine how to divide the 24 hours into segments, but in the end, the decision was made to create three 8-hour segments roughly based on definitions stated here: https://www.britannica.com/dictionary/eb/qa/parts-of-the-day-early-morning-late-morning-etc.
+
+```{r, message = FALSE}
+# Convert Time to Numeric Value
+nypd <- nypd %>%
+mutate(Hour = hour(Time), Minute = minute(Time)) %>%
+mutate(NumericTime = Hour * 3600 + Minute * 60) %>%
+select(-Hour, -Minute)
+
+# Create Time Segments based on NumericTime
+nypd <- nypd %>%
+mutate(TimeSegment = case_when(NumericTime >= 14400 & NumericTime < 43200 ~ "Morning",
+NumericTime >= 43200 & NumericTime < 64800 ~ "Afternoon/Evening",
+NumericTime >= 64800 | NumericTime >= 0 & NumericTime < 14400 ~ "Nighttime",
+TRUE ~ "Unknown"))
+
+# Reorder Columns
+column_order <- c("Date", "Time", "NumericTime", "TimeSegment", "Borough")
+nypd <- nypd %>%
+select(column_order)
+```
+
+### Initial Analysis - Time of Day by Borough
+
+The first summary of data represents the number of shooting incidents that occur during the three time segments within each borough.
+
+```{r, message = FALSE}
+# Create a summary table of event counts by Borough and TimeSegment
+event_counts <- nypd %>%
+  group_by(Borough, TimeSegment) %>%
+  summarize(EventCount = n())
+
+# Modify Time of Day Order
+time_segment_order <- c("Morning", "Afternoon/Evening", "Nighttime")
+
+# Modify Time of Day Labels
+time_segment_labels <- c("Morning (04:00 - 12:00)", "Afternoon/Evening (12:00 - 20:00)", "Nighttime (20:00 - 04:00)")
+
+# Create a bar plot showing number of incidents by time of day and borough
+ggplot(event_counts, aes(x = Borough, y = EventCount, fill = factor(TimeSegment, levels = time_segment_order))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Number of Shooting Incidents in New York City Boroughs by Time of Day",
+       x = "New York City Buroughs",
+       y = "Number of Shooting Incidents",
+       fill = "Time of Day") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Morning" = "lightblue", "Afternoon/Evening" = "deepskyblue", "Nighttime" = "midnightblue"),
+                      labels = setNames(time_segment_labels, time_segment_order))
+```
+
+This shows that the majority of shooting incidents occur during the Nighttime hours (20:00 - 04:00). The chart also highlights that these incidents occur in the boroughs of Brooklyn and The Bronx far more often than the other three. While this might indicate that Brooklyn is completely unsafe at night, an additional analysis of the occurrence of these incidents as a proportion of borough population would provide a much better understanding of how frequently these kinds of events occur.
+
+### Secondary Analysis - Weeks of the Year
+
+Along with categorizing these shooting incidents by time of day, the chart below displays the total number of incidents, between January 2006 and December 2022, by the week of the year. It also includes the number of incidents by borough for each week as a reference.
+
+```{r, message = FALSE}
+# Add a column to number the weeks of the year
+nypd <- nypd %>%
+  mutate(week = lubridate::week(Date))
+
+week_counts <- nypd %>%
+  group_by(Borough, week) %>%
+  summarise(incidents_by_week = n())
+
+combined_plot <- ggplot() +
+  geom_col(data = week_counts, aes(x = week, y = incidents_by_week, fill = "Overall")) +
+  geom_line(data = week_counts, aes(x = week, y = incidents_by_week, color = Borough, group = Borough)) +
+  scale_color_manual(values = c("blue", "red", "green", "purple", "orange")) +
+  labs(x = "Month & Week of Year", y = "Number of Shooting Incidents",
+       title = "Shooting Incidents in New York City by Week (by Borough and Overall)\nTotals from January 2006 - December 2022") +
+  scale_fill_manual(values = "gray", guide = FALSE) +
+  theme_minimal() +
+  theme(panel.grid.minor.x = element_line(color = "black", size = 0.5),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "top") +
+  #guides(fill = guide_legend(title = NULL)) +
+  scale_x_continuous(
+    breaks = seq(3, 54, by = 4.33),
+    labels = month.abb)
+
+combined_plot
+```
+
+Over the course of these 17 years, there was an obvious increase in incidents during the summer months (Northern Hemisphere) of the year. Additional data and further analysis would be needed to determine why this is the case, but one could make a general assumption that during colder months, even criminals don't want to go outside.
+
+### Average Number of Incidents - Weeks of the Year
+
+A count of the number of shooting incidents that have occurred is great for historical analysis, but how would we determine the number of incidents that might occur in the future? The chart below adds in the average number of incidents per week across all boroughs.
+
+```{r, message = FALSE}
+week_averages <- week_counts %>%
+  group_by(week) %>%
+  summarise(AverageIncidentsPerWeek = mean(incidents_by_week))
+
+prediction_plot <- ggplot() +
+  geom_col(data = week_counts, aes(x = week, y = incidents_by_week, fill = "Overall")) +
+  geom_line(data = week_counts, aes(x = week, y = incidents_by_week, color = Borough, group = Borough)) +
+  geom_point(data = week_averages, aes(x = week, y = AverageIncidentsPerWeek, color = "Average Incidents")) +
+  scale_color_manual(values = c("black", "blue", "red", "green", "purple", "orange")) +
+  labs(x = "Month & Week of Year", y = "Number of Shooting Incidents",
+       title = "Shooting Incidents in New York City by Week (by Borough and Overall)\nwith Predicted Averages\nTotals from January 2006 - December 2022") +
+  scale_fill_manual(values = "gray", guide = FALSE) +
+  theme_minimal() +
+  theme(panel.grid.minor.x = element_line(color = "black", size = 0.5),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "top") +
+  scale_x_continuous(
+    breaks = seq(3, 54, by = 4.33),
+    labels = month.abb)
+
+prediction_plot
+```
+
+The chart shows a similar trend of increased incidents during the warmer months of the year. This data could be used by the NYPD to highlight a need for increased patrols during certain times of the year. A more detailed analysis of the averages by borough, or, aligning the original data set that included Latitude and Longitude locations could provide specific locations to increase the presence of law enforcement.
+
+### Bias Identification
+
+When initially reviewing the full data set, I made the determination to cut out any data deemed incomplete. While this may not affect the end result of the analysis, it did force me to focus purely on Time and Date types of analyses, which is most certainly not the whole story that could be told.
+Also, my attempt ot relate the time of incidents to more casual nomenclature of Morning, Afternoon, Evening, or Nighttime, forced me to lump the data together in a way that may not align with the interests of the NYPD or other entities. Breaking down the data by hour of day might provide more beneficial data to the viewer and allow them to make their own definitions of time.
+
+```{r}
+sessionInfo()
+```
